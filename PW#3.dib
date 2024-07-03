@@ -35,6 +35,9 @@
 //
 // Вычисление определенного интеграла
 //
+using System;
+using System.Threading;
+
 class DefiniteIntegral
 {
     //
@@ -45,8 +48,44 @@ class DefiniteIntegral
     //
     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double res = 0.0;
+        int n = (int)((b - a) / step);
+        double width = (b - a) / threadsnumber;
+        Barrier barrier = new Barrier(threadsnumber);
+
+        Thread[] threads = new Thread[threadsnumber];
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            double start = a + i * threadsnumber;
+            double end = start + width;
+
+            threads[i] = new Thread(() =>
+            {
+                double threadSum = 0.0;
+                for (double x = start; x < end; x += step)
+                {
+                    threadSum += (function(x) + function(x + step)) * step / 2.0;
+                }
+                Add(ref res, threadSum);
+                barrier.SignalAndWait();
+            });
+            threads[i].Start();
+        }
+        barrier.SignalAndWait();
+        return res;
+    }
+
+    public static double Add(ref double location1, double value)
+    {
+        double newCurrentValue = location1; // non-volatile read, so may be stale
+        while (true)
+        {
+            double currentValue = newCurrentValue;
+            double newValue = currentValue + value;
+            newCurrentValue = Interlocked.CompareExchange(ref location1, newValue, currentValue);
+            if (newCurrentValue.Equals(currentValue)) // see "Update" below
+                return newValue;
+        }
     }
 }
 
@@ -63,4 +102,4 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-4);
