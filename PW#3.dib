@@ -35,18 +35,58 @@
 //
 // Вычисление определенного интеграла
 //
+using System;
+using System.Threading;
+
 class DefiniteIntegral
 {
-    //
-    // a, b - границы отрезка, на котором происходит вычисление опредленного интеграла
-    // function - функция, для которой вычисляется определнный интеграл
-    // step - размер одного шага разбиения
-    // threadsNumber - число потоков, которые используются для вычислений
-    //
-    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsNumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double res = 0.0;
+        double width = (b - a) / threadsNumber;
+        Barrier barrier = new Barrier(threadsNumber + 1);
+
+        Thread[] threads = new Thread[threadsNumber];
+        for (int i = 0; i < threadsNumber; i++)
+        {
+            double start = a + i * width;
+            double end = start + width;
+
+            threads[i] = new Thread(() =>
+            {
+                double sum = 0.0;
+                double x = start;
+
+                while (x < end)
+                {
+                    double x1 = x;
+                    double x2 = x + step;
+                    if (x2 > end) x2 = end;
+                    sum += (function(x1) + function(x2)) * (x2 - x1) / 2.0;
+                    x = x2;
+                }
+
+                Add(ref res, sum);
+                barrier.SignalAndWait();
+            });
+            threads[i].Start();
+        }
+
+        barrier.SignalAndWait();
+        return res;
+    }
+    
+    public static double Add(ref double location1, double value)
+    {
+        double newCurrentValue = location1;
+        while (true)
+        {
+            double currentValue = newCurrentValue;
+            double newValue = currentValue + value;
+            newCurrentValue = Interlocked.CompareExchange(ref location1, newValue, currentValue);
+            if (newCurrentValue.Equals(currentValue))
+                return newValue;
+        }
     }
 }
 
@@ -60,7 +100,5 @@ var X = (double x) => x;
 var SIN = (double x) => Math.Sin(x);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
-
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
-
-Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
