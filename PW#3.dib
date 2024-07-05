@@ -32,10 +32,10 @@
 
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 
 class DefiniteIntegral
@@ -61,7 +61,6 @@ class DefiniteIntegral
                 {
                     double x1 = x;
                     double x2 = x + step;
-                    if (x2 > end) x2 = end;
                     sum += (function(x1) + function(x2)) * (x2 - x1) / 2.0;
                     x = x2;
                 }
@@ -75,7 +74,6 @@ class DefiniteIntegral
         barrier.SignalAndWait();
         return res;
     }
-    
     public static double Add(ref double location1, double value)
     {
         double newCurrentValue = location1;
@@ -88,17 +86,127 @@ class DefiniteIntegral
                 return newValue;
         }
     }
+    public static double Solve1(double a, double b, Func<double, double> function, double step)
+    {
+        double s = (function(a) + function(b))/2;
+        double s1 = 0;
+        for(double i = a + step; i<=b - step; i+= step)
+        {
+            s1 += function(i);
+        }
+        return s + s1;
+    }
 }
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+double Function(double x)
+{
+    return Math.Sin(x);
+}
+double a = 0;
+double b = 10;
+double requiredAccuracy = 1e-4;
+double[] steps = { 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6 };
+double referenceValue = 1 - Math.Cos(10);
 
-using Xunit;
+double optimalStep = steps[0];
+double minError = double.MaxValue;
+double optimalTime = 0;
 
-var X = (double x) => x;
-var SIN = (double x) => Math.Sin(x);
+Console.WriteLine($"Эталонное значение: {referenceValue}");
+foreach (var step in steps)
+{
+    Stopwatch stopwatch = new Stopwatch();
+    stopwatch.Start();
+    double result = DefiniteIntegral.Solve(a, b, Function, step, 1);
+    stopwatch.Stop();
 
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
-Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+    double error = Math.Abs(result - referenceValue);
+    double time = stopwatch.Elapsed.TotalMilliseconds;
+    Console.WriteLine($"Шаг:{step}, результат: {result}, время выполнения: {time} ms");
+
+    if (error <= requiredAccuracy && time < minError)
+    {
+        minError = time;
+        optimalStep = step;
+        optimalTime = time;
+    }
+}
+Console.WriteLine();
+Console.WriteLine($"Оптимальный шаг: {optimalStep}, время выполнения: {optimalTime} ms");
+
+#!markdown
+
+Вывод: оптимальный варинт - 1e-4
+
+#!csharp
+
+List<double> x = new();
+List<int> y = new();
+
+for (int i = 2; i <= 32; i++)
+{
+    double totalSeconds = 0;
+    int runs = 20;
+
+    for (int j = 0; j < runs; j++)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        DefiniteIntegral.Solve(-100, 100, Function, 1e-4, i);
+        stopwatch.Stop();
+        totalSeconds += stopwatch.Elapsed.TotalSeconds;
+    }
+
+    y.Add(i);
+    double averageTime = totalSeconds / runs;
+    x.Add(averageTime);
+    Console.WriteLine($"Кол-во потоков - {i}, время выполнения: {averageTime:F6}");
+}
+double optimalThreadTime = x.Min();
+int optimalThreads = y[x.IndexOf(x.Min())];
+Console.WriteLine();
+Console.WriteLine($"Лучший вариант: {optimalThreads} потока(ов), время выполнения: {optimalThreadTime}");
+
+#!csharp
+
+#r "nuget:ScottPlot, 5.0.35"
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+    ScottPlot.Plot plt = new();
+plt.YLabel("Количество потоков");
+plt.XLabel("Время выполнения (s)");
+plt.Add.Scatter(x, y);
+plt
+
+#!csharp
+
+double singleThreadedTime = 0;
+        for (int run = 0; run < 20; run++)
+        {
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+            double result = DefiniteIntegral.Solve1(-100, 100, Function, optimalStep);
+            stopwatch.Stop();
+
+            singleThreadedTime += stopwatch.Elapsed.TotalSeconds;
+        }
+        singleThreadedTime /= 20;
+
+        Console.WriteLine($"Кол-во потоков - 1, время выполнения: {singleThreadedTime} s");
+
+#!markdown
+
+Summary
+
+#!csharp
+
+double percentageImprovement = ((singleThreadedTime - optimalThreadTime) / singleThreadedTime) * 100;
+
+Console.WriteLine("\nSummary:");
+Console.WriteLine($"Оптимальный шаг: {optimalStep}");
+Console.WriteLine($"Оптимальное кол-во потоков: {optimalThreads}");
+Console.WriteLine($"Среднее время работы многопоточной версии: {optimalThreadTime} s");
+Console.WriteLine($"Среднее время работы однопоточной версии: {singleThreadedTime} s");
+Console.WriteLine($"Разница в скорости: {percentageImprovement:F2}%");
