@@ -38,3 +38,110 @@ ServerThread может менять свое поведение для обра
 Отсутствие Команд в очереди потока не должно требовать значительных затрат процессорного времени. Значительными считаются затраты, которые зависят от времени простоя потока.
 
 Написать проверку, которая гарантирует правильное выполнение команд HardStop и SoftStop.
+
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+
+public class ServerThread
+{
+    ConcurrentQueue<ICommand> queue = new ConcurrentQueue<ICommand>();
+    bool stoped = false;
+
+    public void EnqueueCommand(ICommand command)
+    {
+        if (!stoped)
+        {
+            queue.Enqueue(command);
+        }
+    }
+
+    public void ExecuteCommands()
+    {
+        while (!stoped || !queue.IsEmpty)
+        {
+            queue.TryDequeue(out ICommand command);
+            try
+            {
+                command.Execute();
+            }
+            catch{}
+        }
+    }
+
+    public void RequestHardStop()
+    {
+        queue.Clear();
+        stoped = true;
+    }
+
+    public void RequestSoftStop()
+    {
+        stoped = true;
+    }
+}
+
+public class HardStopCommand : ICommand
+{
+    private readonly ServerThread serverThread;
+
+    public HardStopCommand(ServerThread serverThread)
+    {
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        this.serverThread.RequestHardStop();
+    }
+}
+
+public class SoftStopCommand : ICommand
+{
+    private readonly ServerThread serverThread;
+
+    public SoftStopCommand(ServerThread serverThread)
+    {
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        this.serverThread.RequestSoftStop();
+    }
+}
+
+ServerThread serverThread = new ServerThread();
+Thread processingThread = new Thread(new ThreadStart(serverThread.ExecuteCommands));
+processingThread.Start();
+ICommand command1 = new SampleCommand("Команда 1");
+ICommand command2 = new SampleCommand("Команда 2");
+        
+serverThread.EnqueueCommand(command1);
+serverThread.EnqueueCommand(command2);
+
+ICommand softStop = new SoftStopCommand(serverThread);
+serverThread.EnqueueCommand(softStop);
+
+Thread.Sleep(1000);
+
+ICommand hardStop = new HardStopCommand(serverThread);
+hardStop.Execute();
+processingThread.Join();
+
+public class SampleCommand : ICommand
+{
+    private readonly string message;
+
+    public SampleCommand(string message)
+    {
+        this.message = message;
+    }
+
+    public void Execute()
+    {
+        Console.WriteLine($"Выполнено: {message}");
+    }
+}
