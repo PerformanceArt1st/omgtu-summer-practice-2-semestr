@@ -37,10 +37,235 @@
 Для этого следует использовать условные события, которые позволят убедиться, что оба потока запустились и готовы читать и писать объекты и только потом запускать таймер.
 2. Для итогового вывода сравнивать усредненные значения.
 
-#!markdown
+#!csharp
 
-// здесь писать код
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+public class PerformanceTest
+{
+    public static (long readTime, long totalTime) TestBlockingCollection()
+    {
+        var collection = new BlockingCollection<object>();
+        var startEvent = new ManualResetEvent(false);
+        var completeEvent = new ManualResetEvent(false);
+        long readTime = 0;
+        long totalTime;
+        int remainingObjects = 1000000;
+        bool isRunning = true;
+
+        Thread writerThread = new(() =>
+        {
+            startEvent.WaitOne();
+            while (isRunning)
+            {
+                if (remainingObjects > 0)
+                {
+                    collection.Add(new object());
+                    Interlocked.Decrement(ref remainingObjects);
+                }
+                if (remainingObjects == 0 && collection.Count == 0)
+                    isRunning = false;
+            }
+        });
+
+        Thread readerThread = new(() =>
+        {
+            startEvent.WaitOne();
+            Stopwatch readWatch = Stopwatch.StartNew();
+            while (isRunning)
+            {
+                if (collection.Count >= 1)
+                {
+                    collection.Take();
+                }
+            }
+            readWatch.Stop();
+            readTime = readWatch.ElapsedMilliseconds;
+            completeEvent.Set();
+        });
+
+        readerThread.Start();
+        writerThread.Start();
+        startEvent.Set();
+
+        Stopwatch totalWatch = Stopwatch.StartNew();
+        completeEvent.WaitOne();
+        totalWatch.Stop();
+        totalTime = totalWatch.ElapsedMilliseconds;
+
+        readerThread.Join();
+        writerThread.Join();
+
+        return (readTime, totalTime);
+    }
+
+    public static (long readTime, long totalTime) TestConcurrentQueue()
+    {
+        var collection = new ConcurrentQueue<object>();
+        var startEvent = new ManualResetEvent(false);
+        var completeEvent = new ManualResetEvent(false);
+        long readTime = 0;
+        long totalTime;
+        int remainingObjects = 1000000;
+        bool isRunning = true;
+        object dummy = new object();
+
+        Thread writerThread = new(() =>
+        {
+            startEvent.WaitOne();
+            while (isRunning)
+            {
+                if (remainingObjects > 0)
+                {
+                    collection.Enqueue(new object());
+                    Interlocked.Decrement(ref remainingObjects);
+                }
+                if (remainingObjects == 0 && collection.Count == 0)
+                    isRunning = false;
+            }
+        });
+
+        Thread readerThread = new(() =>
+        {
+            startEvent.WaitOne();
+            Stopwatch readWatch = Stopwatch.StartNew();
+            while (isRunning)
+            {
+                if (collection.Count >= 1)
+                {
+                    collection.TryDequeue(out dummy);
+                }
+            }
+            readWatch.Stop();
+            readTime = readWatch.ElapsedMilliseconds;
+            completeEvent.Set();
+        });
+
+        readerThread.Start();
+        writerThread.Start();
+        startEvent.Set();
+
+        Stopwatch totalWatch = Stopwatch.StartNew();
+        completeEvent.WaitOne();
+        totalWatch.Stop();
+        totalTime = totalWatch.ElapsedMilliseconds;
+
+        readerThread.Join();
+        writerThread.Join();
+
+        return (readTime, totalTime);
+    }
+
+    public static (long readTime, long totalTime) TestQueue()
+    {
+        Queue<object> queue = new Queue<object>();
+        Stopwatch totalWatch = Stopwatch.StartNew();
+
+        for (int i = 0; i < 1000000; i++)
+        {
+            queue.Enqueue(new object());
+        }
+
+        Stopwatch readWatch = Stopwatch.StartNew();
+        for (int i = 0; i < 1000000; i++)
+        {
+            queue.Dequeue();
+        }
+        readWatch.Stop();
+        totalWatch.Stop();
+
+        return (readWatch.ElapsedMilliseconds, totalWatch.ElapsedMilliseconds);
+    }
+}
+
+#!csharp
+
+var resultsBlocking = new List<(long readTime, long totalTime)>();
+var resultsConcurrent = new List<(long readTime, long totalTime)>();
+var resultsQueue = new List<(long readTime, long totalTime)>();
+
+for (int i = 0; i < 10; i++)
+{
+    resultsConcurrent.Add(PerformanceTest.TestConcurrentQueue());
+    resultsBlocking.Add(PerformanceTest.TestBlockingCollection());
+    resultsQueue.Add(PerformanceTest.TestQueue());
+}
+
+long averageBlocking = ComputeAverage(resultsBlocking);
+long averageConcurrent = ComputeAverage(resultsConcurrent);
+long averageQueue = ComputeAverage(resultsQueue);
+
+Console.WriteLine("Среднее время выполнения для BlockingCollection: " + averageBlocking + " мс");
+Console.WriteLine("Среднее время выполнения для ConcurrentQueue: " + averageConcurrent + " мс");
+Console.WriteLine("Среднее время выполнения для Queue: " + averageQueue + " мс");
+
+long ComputeAverage(List<(long readTime, long totalTime)> results)
+{
+    long sum = 0;
+    foreach (var result in results)
+    {
+        sum += result.totalTime;
+    }
+    return sum / results.Count;
+}
+
+#!csharp
+
+using Microsoft.DotNet.Interactive.Formatting;
+#r "nuget: ScottPlot, 5.0.36"
+
+void PlotResults(List<(long readTime, long totalTime)> blockingResults,
+                List<(long readTime, long totalTime)> concurrentResults,
+                List<(long readTime, long totalTime)> queueResults)
+{
+    int[] indices = Enumerable.Range(1, 10).ToArray();
+
+    var blockingReadTimes = blockingResults.Select(r => r.readTime).ToArray();
+    var blockingTotalTimes = blockingResults.Select(r => r.totalTime).ToArray();
+
+    var concurrentReadTimes = concurrentResults.Select(r => r.readTime).ToArray();
+    var concurrentTotalTimes = concurrentResults.Select(r => r.totalTime).ToArray();
+
+    var queueReadTimes = queueResults.Select(r => r.readTime).ToArray();
+    var queueTotalTimes = queueResults.Select(r => r.totalTime).ToArray();
+
+    Formatter.Register(typeof(ScottPlot.Plot), (p, w) =>
+        w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+    ScottPlot.Plot plot1 = new();
+    ScottPlot.Plot plot2 = new();
+    ScottPlot.Plot plot3 = new();
+
+    plot1.Add.Scatter(indices, blockingReadTimes);
+    plot1.Add.Scatter(indices, blockingTotalTimes);
+    plot2.Add.Scatter(indices, concurrentReadTimes);
+    plot2.Add.Scatter(indices, concurrentTotalTimes);
+    plot3.Add.Scatter(indices, queueReadTimes);
+    plot3.Add.Scatter(indices, queueTotalTimes);
+
+    Console.WriteLine("График 10 замеров времени чтения и общего времени для BlockingCollection:");
+    display(plot1);
+
+    Console.WriteLine("График 10 замеров времени чтения и общего времени для ConcurrentQueue:");
+    display(plot2);
+
+    Console.WriteLine("График 10 замеров времени чтения и общего времени для Queue:");
+    display(plot3);
+}
+
+PlotResults(resultsBlocking, resultsConcurrent, resultsQueue);
 
 #!markdown
 
 ## Вывод
+
+#!csharp
+
+var procent = 100-100*(float)averageQueue/(float) averageConcurrent;
+Console.WriteLine("Разница в процентах между Queue и ConcurrentCollection: "+procent+" %");
